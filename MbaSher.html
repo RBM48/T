@@ -1,25 +1,119 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>بث مباشر للحصص</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>البث المباشر للحصص</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1F3A33">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="الحصص">
 <style>
-html,body{margin:0;height:100%;background:#eef5f3}
-iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:#eef5f3}
-#ld{position:fixed;inset:0;display:grid;place-items:center;font-family:Tahoma,Arial,sans-serif;color:#6f8a85;font-size:18px;z-index:1}
+  html,body{margin:0;height:100%;background:#1F3A33;font-family:Tahoma,"Segoe UI",sans-serif}
+  #app{position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;bottom:0;width:100%;height:calc(100% - env(safe-area-inset-top,0px));border:0;background:#EEF2EC}
+  #bar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:5;
+       background:#1F3A33;color:#F3F6F1;border:2px solid #E8B04B;border-radius:12px;padding:12px 14px;
+       display:flex;gap:10px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.3);font-size:15px;line-height:1.5}
+  #bar[hidden]{display:none}
+  #bar p{margin:0;flex:1}
+  #bar button{font:inherit;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;white-space:nowrap}
+  #go{background:#E8B04B;color:#1F3A33;font-weight:700}
+  #x{background:transparent;color:#F3F6F1;font-size:20px;padding:4px 8px}
+  #toast{position:fixed;top:calc(16px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:6;
+         background:#3C7A55;color:#fff;padding:10px 18px;border-radius:10px;font-size:15px}
+  #toast[hidden]{display:none}
 </style>
+<script src="config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
 </head>
 <body>
-<div id="ld">⏳ جارٍ التحميل...</div>
-<iframe id="f" allow="clipboard-write; fullscreen"></iframe>
+<iframe id="app" title="البث المباشر للحصص" allow="autoplay"></iframe>
+
+<div id="bar" hidden role="dialog" aria-live="polite">
+  <p id="msg"></p>
+  <button id="go" type="button" hidden>تفعيل</button>
+  <button id="x" type="button" aria-label="إغلاق">×</button>
+</div>
+<div id="toast" hidden role="status"></div>
+
 <script>
-/* غيّر السطر التالي فقط: ضع رابط الموقع الآخر (المنتهي بـ exec) بين علامتي الاقتباس */
-var EXEC = 'https://script.google.com/macros/s/AKfycbwk0AtQBz2ADK59heXLFnAvoBXED58KjZK0pLXto-4Dm1ysWW6CVVGQX-Qyk-FOoWM_OA/exec';
-var f = document.getElementById('f');
-f.onload = function () { var l = document.getElementById('ld'); if (l) l.remove(); };
-f.src = EXEC + (location.search || '');
+  const $ = id => document.getElementById(id);
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  let reg = null;
+
+  $('app').src = APPS_SCRIPT_URL;
+
+  function showBar(text, withButton){
+    $('msg').textContent = text;
+    $('go').hidden = !withButton;
+    $('bar').hidden = false;
+  }
+  function hideBar(){ $('bar').hidden = true; }
+  function toast(t){ $('toast').textContent = t; $('toast').hidden = false; setTimeout(() => $('toast').hidden = true, 3500); }
+
+  $('x').onclick = () => { hideBar(); try { sessionStorage.setItem('barClosed','1'); } catch(e){} };
+  $('go').onclick = () => subscribe(false);
+
+  async function init(){
+    if (!('serviceWorker' in navigator)) return;
+    reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
+    await navigator.serviceWorker.ready;
+
+    let closed = false; try { closed = sessionStorage.getItem('barClosed') === '1'; } catch(e){}
+
+    if (isIOS && !standalone){
+      if (!closed) showBar('لتصلك الإشعارات على الآيفون: اضغط زر المشاركة ثم «إضافة إلى الشاشة الرئيسية»، وافتح التطبيق من الأيقونة.', false);
+      return;
+    }
+    if (!('Notification' in window) || !('PushManager' in window)) return;
+    if (Notification.permission === 'granted') return subscribe(true);
+    if (Notification.permission === 'denied'){
+      if (!closed) showBar('الإشعارات مرفوضة لهذا الموقع. فعّلها من إعدادات المتصفح ثم أعد فتح الصفحة.', false);
+      return;
+    }
+    if (!closed) showBar('🔔 فعّل الإشعارات لتصلك نهاية الحصص وغياب المعلمين حتى والتطبيق مقفل.', true);
+  }
+
+  async function subscribe(silent){
+    try {
+      if (Notification.permission !== 'granted'){
+        const p = await Notification.requestPermission();
+        if (p !== 'granted'){ showBar('لم يتم السماح بالإشعارات.', false); return; }
+      }
+      if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+      const messaging = firebase.messaging();
+      const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+      if (!token) throw new Error('لم يصدر رمز الجهاز');
+
+      let saved = null; try { saved = localStorage.getItem('fcmToken'); } catch(e){}
+      if (saved !== token || !silent){
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST', mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'subscribe', token, device: navigator.userAgent })
+        });
+        try { localStorage.setItem('fcmToken', token); } catch(e){}
+      }
+
+      // والتطبيق مفتوح: نعرض الإشعار بأنفسنا
+      messaging.onMessage(p => {
+        const n = p.notification || {};
+        reg.showNotification(n.title || 'تنبيه', { body: n.body || '', icon: 'icon-192.png', badge: 'icon-192.png', dir: 'rtl', lang: 'ar' });
+      });
+
+      hideBar();
+      if (!silent) toast('✅ تم تفعيل الإشعارات');
+    } catch (e) {
+      showBar('تعذر تفعيل الإشعارات: ' + e.message, true);
+    }
+  }
+
+  init();
 </script>
 </body>
 </html>
